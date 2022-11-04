@@ -1,0 +1,429 @@
+#include <pic18f47q10.inc>
+#include <xc.inc>
+
+CONFIG FEXTOSC=0b100	;com isto podemos ligar o led do 
+CONFIG CSWEN=0b1	  
+CONFIG WDTE=OFF		
+    
+#define enviar_dados 0
+#define count 1
+#define count2 1
+#define BAUD 19200 ; baund-rate estabelecido 
+#define XTAL 32   
+#define X1 ((XTAL*1000000)/(64*BAUD))-1
+
+#define X 25 ; 25 para um baud-rate de 19200 com um  CLK de 32MHz 
+  
+
+PSECT code
+ORG 0x0000
+    goto inicio  ;inicio do código (posição 0x00 da memória) 
+ 
+ORG 0x0008
+    goto interrupcoes   ;a posição 0x0008 para as interrupções
+
+    
+ORG 0x0018
+   ; GOTO baixa_int
+ORG 0x0030   
+inicio:     
+    
+    ;=====================
+    ;CONFIGURAÇÃO DA PORTA
+    ;=====================
+    BANKSEL LATA
+    CLRF LATA,1 ; coloca todos os bits do LATA a zero
+    MOVLW 0b00000000 ; defenir todos os pinos como output 
+    BANKSEL TRISA
+    MOVWF TRISA,1 
+    MOVLW 0b00000000 ; colocar todos os pinos como digitais
+    BANKSEL ANSELA
+    MOVWF ANSELA,1 
+   
+    
+    ;=====================
+    ;CONFIGURAÇÃO DO CLOCK
+    ;=====================
+    BANKSEL OSCCON1
+    MOVLW 0b01100000  ;NOSC=110(escolhemos HFINTOSC como clock source) e NDIV(clock divider)=0000=1
+    MOVWF OSCCON1,1   
+    BANKSEL OSCFRQ
+    MOVLW 0b0000110 ; HFFRQ 0110 -> clk= 32 MHz (32Mhz/1=clk/NDIV)
+    MOVWF OSCFRQ,1  ;HFINTOSC Frequency Selection Register
+    BANKSEL OSCEN
+    MOVLW 0b01000000 ;HFINTOSC ativo
+    MOVWF OSCEN,1
+    
+    ;to observe CLK at a pin, use of CLKR
+    BANKSEL CLKRCON
+    MOVLW  0b10010111    ; enable reference clock module, 50% dutyclycle, divide by 128
+    MOVWF  CLKRCON
+    BANKSEL CLKRCLK
+    MOVLW  0b00000000    ; select reference clock Fosc
+    MOVWF  CLKRCLK
+    
+    
+    ;==================
+    ;CONFIGURAÇÃO DA PORTB
+    ;===================
+    BANKSEL LATB
+    CLRF LATB,1 ; coloca todos os bits do LATB a 0
+    BANKSEL TRISB
+    CLRF TRISB,1 ;Coloca todos os pinos como saída
+    BSF	 TRISB,4 ;Apenas o pino RB4 vai ser um pino de entrada(botão)
+    BANKSEL ANSELB
+    CLRF ANSELB,1 ;Todos os pinos são digitais      
+    BANKSEL INT0PPS
+    MOVLW 0x0C	   ; 0x0C para RB4
+    MOVWF INT0PPS  ; liga o RB4 à INT0
+    
+    ;=====================
+    ;CONFIGURAÇÃO DA PORTD
+    ;=====================
+    BANKSEL LATD
+    CLRF LATD,1 ; coloca todos os bits do LATD a 0
+    BANKSEL TRISD
+    MOVLW 0b11100000 ; RD7,RD6,RD5 -> pinos de entrada o resto saída 
+    MOVWF TRISD,1 
+    BANKSEL ANSELD
+    MOVLW 0b11100000 ; RD7,RD6,RD5 -> analógicos o resto digital
+    MOVWF ANSELD,1 
+    
+    
+     ;=====================
+    ;CONFIGURAÇÃO DA PORTC 
+    ;=====================
+    BANKSEL LATC
+    CLRF LATC,1 ; coloca todos os bits do LATC a 0
+    BANKSEL TRISC
+   ; MOVLW 0b10000000 ; todos os pinos são de output exceto o RC7(é input)
+    MOVLW 0b00000000
+    MOVWF TRISC,1
+    BANKSEL ANSELC
+    CLRF ANSELC,1 ;todos os pinos são digitais
+    BANKSEL RC4PPS
+    MOVLW 0x09     ;escolhemos o EUSART1 (TX/CK)
+    MOVWF RC4PPS   ;colocamos o EUSART1 (TX/CK) como output no pino RC4
+    
+    ;Para enviar dados do PC para o PIC
+    ;MOVLW 0b00010111  ;escolher o pino RC7 para o RX
+    ;MOVWF RX1PPS
+    
+    
+    ;======================
+    ;CONFIGURAÇÃO DO TIMER0
+    ;======================
+    BANKSEL T0CON0
+    MOVLW 0b00000001 ;1:2 postscaler(as interrupcpes sao feitas a cada 2 vezes)
+                     ;timer de 8bits(bit 4)=> a contagem é apenas realizada pelo registo TMR0L 
+    MOVWF T0CON0,1
+    BANKSEL T0CON1
+    
+    ;Tempo em que o TIMER0 incrementa: 2.048ms =1/(CLK/2)   2=postscaler
+    
+    MOVLW 0b01001101   ;7,6,5 bits(010) escolhemos clock=Fosc/4
+                       ;bit 4=0 => a entrada para o contador TIMER0 é sincronizada ao FOSC/4
+                       ;prescaler =1101 => 8192  -> CLK=32M(FOSC)/4/8192
+    MOVWF T0CON1,1
+    BANKSEL TMR0L   
+    CLRF TMR0L      ; contador a zero
+    BANKSEL TMR0H
+    MOVLW 0B00000001   ;TMR0H=1(vai servir para comparar o TMR0L com o TMR0H) 
+    MOVWF TMR0H
+   
+    
+     ;====================
+    ;CONFIGURAÇÃO DO ADC
+    ;====================
+    BANKSEL ADPCH
+    MOVLW 0b00011111   ;Inicialmente vamos ter o eixo dos x(RD7) conectado ao circuito Sample-and-Hold
+    MOVWF ADPCH,1
+    BANKSEL ADREF
+    MOVLW 0b00000000  ;Vref+=Vdd(3.3V) and Vref-=vss(GND=0V)
+    MOVWF ADREF,1
+    BANKSEL ADCLK
+    MOVLW 0b00001111   ;FOSC=32Mhz => ADC freq= 32Mhz/div=1Mhz em que div=(2*(15+1))=32 => 1 us para converter 1 bit => 11.5us para 10 bits(de notar que não é 10us)
+    MOVWF ADCLK,1      
+    BANKSEL ADCON0
+    MOVLW 0b10000100    ;ADC=ativado(bit7), right justification(bit2), clock=Fosc/div(bit4), a conversão não está em progresso (bit 0)
+    MOVWF ADCON0,1
+ 
+      ;===========================
+    ;CONFIGURAÇÃO DA PORTA SERIE
+    ;===========================
+
+    MOVLW X	    ;25  valor calculado para o SPRGB
+    BANKSEL SP1BRGL 
+    MOVWF SP1BRGL   ; introduz-se o valor 25 no SP2BRGL
+    MOVLW 0x00
+    MOVWF SP1BRGH	; aqui coloca-se tudo a zero, pois se o byte mais significativo for
+                        ; zero , e o menos significativo for 25 então o seu total dá 25
+    
+    ;Assim, SP1BRG=SP1BRGH:SP1BRGL=00000000 00011001=25 => desired baud rate_do PIC= 32M/(64*(25+1))=19230.769
+    ;desired baud rate que quriamos=19200
+    ;Erro=(19230.769-19200/19200)*100= 0.16
+    
+    MOVLW 0b10100000	
+                        ;bit 6-> 8 data bits, 
+			;bit 5-> TX enabled(transmissão ativada),
+			;bit 4-> Eusart em modo assíncrono(SYNC=0)
+			;bit 2-> BRGH=0(low speed), 
+			;bit 1-> TSR(transmit shift register) is not empty
+    BANKSEL TX1STA
+    MOVWF TX1STA	
+    ;MOVLW 0b10010000	; ativar a porta serie(bit7), ativar a recepçao(bit4),8 bits
+    MOVLW 0b10000000    ; ativar a porta serie 
+    BANKSEL RC1STA
+    MOVWF RC1STA 
+    MOVLW 0b00000000    ;8 bit Baud Rate generator ################Ver melhor 
+    MOVWF BAUD1CON
+   
+    ;=====================
+    ;ATIVAR INTERRUPÇÕES
+    ;=====================
+   
+    BANKSEL PIR0
+    BCF PIR0, 5 ;limpa a flag de interrupçao do timer0
+    BANKSEL PIR1
+    BCF PIR1,0  ;limpa a flag de interrupção do ADC
+    BANKSEL PIE0
+    BSF PIE0,5  ;ativa a interrupção do timer0
+    BSF PIE0,0   ;ativa interrupçoes externas(INT0IE)
+    BCF PIR0,0   ;limpa a flag de interrupção externa(INT0IF)
+    BANKSEL PIE1
+    BSF PIE1,0  ;ativa as interrupções ADC
+    
+    ;BANKSEL PIE3
+    ;BSF PIE3,5 ; ativar a interrupção de recebimento
+    
+    
+    ;BANKSEL INTCON
+    ;BSF INTCON,5 ;liga a prioridade das interrupções
+    
+    BANKSEL INTCON
+    BSF INTCON,7  ;ativa as interrupçoes globais(GIE/GIEH=1)
+    
+    
+    ;BANKSEL IPR0
+    ;MOVLW 0b00100001 ; timer e INT0 alta prioridade
+    ;MOVWF IPR0
+    ;BANKSEL IPR1
+    ;MOVLW 0b00000001 ; adc alta prioridade
+    ;MOVWF IPR1
+    ;BANKSEL IPR3
+    ;MOVLW 0b00000000  ; interrupção de recebimento de baixa prioridade
+    ;MOVWF IPR3
+    
+    
+   
+    
+    BSF INTCON,6  ;ativa interrupçoes perifericas
+;========================
+;Main code (do nothing)
+;========================
+main:
+    
+    nop
+    nop
+    BCF PORTA,6 
+    nop
+    goto main  
+
+;===========================
+;Handler for an interruption
+;===========================
+/*baixa_int:
+    BANKSEL PIR3
+    BTFSC PIR3,5
+    GOTO acender_led
+    
+acender_led:
+    MOVF RC1REG,0
+    MOVWF count2
+    BTG PORTA,4
+    ver1:
+       MOVLW 0b00000001
+       CPFSEQ count2
+       GOTO ver0
+       BSF PORTA,4
+       GOTO final
+    ver0:
+       MOVLW 0b00000000 
+       CPFSEQ count2
+       nop
+       BCF PORTA,4
+       GOTO final
+    final:
+       ;BSF PORTA,4
+    GOTO INT0_int_handler
+    RETFIE   
+
+
+
+*/
+
+
+
+
+interrupcoes:
+    
+    BANKSEL PIR0
+    BTFSC PIR0, 5 ;flag de interrupção do timero está a 1(o registo timer0 deu overflow)? Sim=>vai para interrupcao_timer0//// Nao=>Salta
+    goto interrupcao_TIMER0
+    
+    BTFSC PIR0, 0 ;ocorreu interrupçoes externas(INT0IF)? Sim=>vai para interrupcao_botao/// Não=>Salta
+    goto interrupcao_botao
+    
+    BANKSEL PIR1
+    BTFSC PIR1,0   ;A conversão está completa(flag de interrupcao do ADC a 1)? Sim=>vai para interrupcao_ADC/// Não=>Salta
+    goto interrupcao_ADC
+    
+    
+    ;BANKSEL PIR3
+    ;BTFSC PIR3,5
+    ;GOTO acender_led
+    ;RETFIE  ;return from interruption to where the code was before the int happened
+
+    
+interrupcao_TIMER0:
+    
+    ; O count vai servir para conseguimos controlar a que canal estamos conectados( x,y e z)
+    
+    BANKSEL PIR0
+    BCF PIR0,5 ;limpa a flag de interrupcao do timer0
+    enviarcontrolo:
+         MOVLW 0b00000001 ; verificar se o canal que vai ser convertido é o x, caso seja então tenho de enviar antes o controlo
+         CPFSEQ count ; se for igual ao W, skip 
+	 GOTO incrementax
+	 MOVLW 0b11111111 ; enviar um primeiro byte de controlo(F)
+         MOVWF enviar_dados
+         CALL enviar_porta_serie
+	 MOVLW 0b11111111 ; enviar o segundo byte de controlo(F)
+         MOVWF enviar_dados
+         CALL enviar_porta_serie ; Vai ser enviado FF(para saber no matlab a qual dos canais estamos ligados) 
+	 GOTO incrementax
+    
+
+    incrementax:
+         MOVLW 0b00000001
+         CPFSEQ count ; se for igual ao W skip 
+         GOTO incrementay
+         MOVLW 0b00000010 ; o count passa para 2 porque o proximo canal vai ser o y
+         MOVWF count
+         GOTO converter
+    incrementay:
+         MOVLW 0b00000010
+         CPFSEQ count ; se for igual ao W skip 
+         GOTO incrementaz
+         MOVLW 0b00000011 ;o count passa para 3 porque o proximo canal vai ser o z
+         MOVWF count
+         GOTO converter
+    incrementaz:
+         MOVLW 0b00000011
+         CPFSEQ count ; se for igual ao W skip 
+         nop
+         MOVLW 0b00000001 ;o count passa para 1 porque o proximo canal vai ser o x
+         MOVWF count
+         GOTO converter
+    converter:
+         BANKSEL ADCON0
+         BSF ADCON0,0 ; iniciar a conversão do ADC 
+      
+    
+    RETFIE  ;retornar da interrupcao
+    
+interrupcao_botao: 
+    BANKSEL PIR0
+    BCF PIR0, 0   ; limpa a flag da interrupçao externa
+    BANKSEL PORTA
+    BTG PORTA,5    ; altera o estado do LED (ON se OFF, OFF se ON)
+    BTG T0CON0,7   ;altera o estado do TIMER0(ON se OFF, OFF se ON)
+    
+    ;as proximas  4 linhas servem para quando clicar no botão o código começar sempre a converter apartir do canal x
+    MOVLW 0b00000001
+    MOVWF count
+    MOVLW 0b00011111 ; incialmente vão ser os dados do ax que vão ser convertidos(canal RD7)
+    BANKSEL ADPCH
+    MOVWF ADPCH,1
+    RETFIE  ;retornar 
+    
+interrupcao_ADC:
+    
+    ; Nós vamos enviar os 10 bits resultantes da conversão do ADC pela porta série.
+    
+    BANKSEL ADRESH
+    MOVFF ADRESH, enviar_dados ;os 2 MSB da conversão do ADC vão ser colocados na variavel
+    CALL enviar_porta_serie ; os  2 MSB da conversão do ADC vão ser enviados para o PC
+    MOVFF ADRESL, enviar_dados;os 8 LSB da conversão do ADC vão ser colocados na variavel
+    CALL enviar_porta_serie;os 8 LSB da conversão do ADC vão ser enviados para o PC
+    BANKSEL PIR1
+    BCF PIR1,0   ;limpar a flag de interrupcao do ADC 
+    canal1:
+        MOVLW 0b00000001 
+	CPFSEQ count ; se count=1 skip
+	GOTO canal2
+	MOVLW 0b00011111 ; se count=1 => canal vai ser o x( ADPCH=RD7)
+	BANKSEL ADPCH
+	MOVWF ADPCH,1
+	GOTO fim
+    canal2:
+        MOVLW 0b00000010
+	CPFSEQ count ; se count=2 skip 
+	GOTO canal3
+	MOVLW 0b00011110 ; se count=2 => canal vai ser o y( ADPCH=RD6)
+	BANKSEL ADPCH
+	MOVWF ADPCH,1
+	GOTO fim
+    
+    canal3:
+        MOVLW 0b00000011
+	CPFSEQ count  ;se count=3 skip
+	nop
+	MOVLW 0b00011101 ;se count=3 => canal vai ser o z( ADPCH=RD5)
+        BANKSEL ADPCH       
+	MOVWF ADPCH,1
+	GOTO fim
+    
+    
+    
+    fim:
+    nop
+    
+    RETFIE  ;retornar da interrupcao
+
+;acender_led:
+    ;MOVF RC1REG,0
+    ;MOVWF count2
+    ;BTG PORTA,4
+    ;ver1:
+       ;MOVLW 0b00000001
+       ;CPFSEQ count2
+       ;GOTO ver0
+       ;BSF PORTA,4
+       ;GOTO final
+    ;ver0:
+       ;MOVLW 0b00000000 
+       ;CPFSEQ count2
+       ;nop
+       ;BCF PORTA,4
+       ;GOTO final
+    ;final:
+       ;BSF PORTA,4
+    ;RETFIE
+;============================
+;Send a char using USART1
+;============================
+    
+enviar_porta_serie:
+    
+    BANKSEL PIR3
+    BTFSS PIR3,4     ;Skip se o buffer de transmissão está vazio
+                     ;TX1IF=1(o buffer de transmissão do EUSART1(TX1REG) está vazio)
+		     ;TX1IF=0( o buffer de transmissão do EUSART1 está cheio)
+    bra enviar_porta_serie ; Se não está vazio, vamos andar neste loop até que esteja
+    BANKSEL TX1REG
+    movff enviar_dados,TX1REG ; Escrevemos o que está no enviar dados no registo TX1REG
+    
+    RETURN
+
+end
