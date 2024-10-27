@@ -1,2 +1,3 @@
-# Aquisicao-de-sinais-com-uso-de-microcontrolador
-Aquisição e tratamento dos sinais emitidos por um acelerômetro com uso de um microcontrolador PIC18FQ10 e representação gráfica dos mesmos em tempo real através do Matlab
+# Signal-Acquisition-Using-a-Microcontroller
+
+Acquisition and processing of signals from an accelerometer using a PIC18FQ10 microcontroller, with real-time graphical representation in Matlab.
